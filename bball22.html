@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Mobile Hoops</title>
+<style>
+    :root {
+        --primary: #ff6b35;
+        --bg-top: #1a1a2e;
+        --bg-bottom: #16213e;
+        --text: #ffffff;
+        --rim: #e63946;
+        --backboard: #f1faee;
+    }
+    
+    * { box-sizing: border-box; }
+    
+    body, html {
+        margin: 0; padding: 0;
+        width: 100%; height: 100%;
+        overflow: hidden;
+        background: linear-gradient(to bottom, var(--bg-top), var(--bg-bottom));
+        font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        touch-action: none; 
+        user-select: none;
+        -webkit-user-select: none;
+    }
+
+    #gameCanvas {
+        display: block;
+        width: 100%; height: 100%;
+        box-shadow: inset 0 0 100px rgba(0,0,0,0.5);
+    }
+
+    #uiLayer {
+        position: absolute;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        pointer-events: none;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+    }
+
+    .hud {
+        padding: 20px;
+        display: flex;
+        justify-content: space-between;
+        background: linear-gradient(to bottom, rgba(0,0,0,0.6), transparent);
+    }
+
+    .stats { display: flex; flex-direction: column; }
+    
+    .stat-box {
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(5px);
+        padding: 10px 15px;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+    }
+
+    .stat-label {
+        font-size: 0.8rem;
+        color: rgba(255,255,255,0.7);
+        letter-spacing: 1px;
+        text-transform: uppercase;
+    }
+
+    .stat-value {
+        font-size: 1.8rem;
+        font-weight: 900;
+        color: var(--text);
+        margin-top: -2px;
+    }
+
+    #feedback {
+        position: absolute;
+        top: 40%; left: 50%;
+        transform: translate(-50%, -50%) scale(0.5);
+        font-size: 4rem;
+        font-weight: 900;
+        color: #ffd166;
+        text-transform: uppercase;
+        text-shadow: 0px 4px 15px rgba(0,0,0,0.6), 0px 0px 20px rgba(255, 209, 102, 0.8);
+        opacity: 0;
+        transition: opacity 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        pointer-events: none;
+    }
+
+    #feedback.show {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+    }
+
+    .controls {
+        padding: 20px;
+        display: flex;
+        justify-content: center;
+        margin-bottom: 20px;
+    }
+
+    #restartBtn {
+        pointer-events: auto;
+        padding: 15px 30px;
+        font-size: 1.2rem;
+        font-weight: bold;
+        color: white;
+        background: var(--primary);
+        border: none;
+        border-radius: 30px;
+        box-shadow: 0 6px 0 #cc4b20, 0 10px 20px rgba(0,0,0,0.4);
+        cursor: pointer;
+        transition: transform 0.1s, box-shadow 0.1s;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    #restartBtn:active {
+        transform: translateY(6px);
+        box-shadow: 0 0 0 #cc4b20, 0 4px 10px rgba(0,0,0,0.4);
+    }
+    
+    #instructions {
+        position: absolute;
+        bottom: 100px;
+        width: 100%;
+        text-align: center;
+        color: rgba(255,255,255,0.5);
+        font-size: 1.1rem;
+        pointer-events: none;
+        transition: opacity 0.5s;
+    }
+</style>
+</head>
+<body>
+
+<canvas id="gameCanvas"></canvas>
+
+<div id="uiLayer">
+    <div class="hud">
+        <div class="stat-box">
+            <div class="stat-label">Score</div>
+            <div class="stat-value" id="scoreEl">0</div>
+        </div>
+        <div class="stat-box" style="text-align: right;">
+            <div class="stat-label">Accuracy</div>
+            <div class="stat-value"><span id="pctEl">0</span><span style="font-size:1rem">%</span></div>
+            <div class="stat-label" style="font-size:0.7rem"><span id="shotsEl">0</span> SHOTS</div>
+        </div>
+    </div>
+    
+    <div id="feedback">SWISH!</div>
+    <div id="instructions">Drag to aim, release to shoot</div>
+    
+    <div class="controls">
+        <button id="restartBtn">Reset Stats</button>
+    </div>
+</div>
+
+<script>
+/** * Mobile Hoops - Physics & Graphics Engine
+ */
+
+// --- DOM & Setup ---
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+let cw, ch;
+
+// UI Elements
+const scoreEl = document.getElementById('scoreEl');
+const pctEl = document.getElementById('pctEl');
+const shotsEl = document.getElementById('shotsEl');
+const feedbackEl = document.getElementById('feedback');
+const restartBtn = document.getElementById('restartBtn');
+const instructionsEl = document.getElementById('instructions');
+
+// --- Game State & Constants ---
+let score = 0;
+let shots = 0;
+let hasStarted = false;
+let cameraShake = 0;
+
+const GRAVITY = 0.45;
+const FRICTION = 0.99;
+const BOUNCE_DAMPING = 0.75;
+const RIM_BOUNCE = 0.65;
+const MAX_DRAG_DIST = 200;
+const POWER_MULTIPLIER = 0.16;
+
+// --- Audio System (Web Audio API) ---
+let audioCtx = null;
+
+function initAudio() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+}
+
+function playSound(type) {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+    
+    osc.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    
+    const now = audioCtx.currentTime;
+    
+    if (type === 'bounce') {
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(150, now);
+        osc.frequency.exponentialRampToValueAtTime(40, now + 0.1);
+        gainNode.gain.setValueAtTime(0.5, now);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+        osc.start(now);
+        osc.stop(now + 0.1);
+    } else if (type === 'rim') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(300, now);
+        osc.frequency.exponentialRampToValueAtTime(600, now + 0.05);
+        gainNode.gain.setValueAtTime(0.8, now);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+        osc.start(now);
+        osc.stop(now + 0.1);
+    } else if (type === 'score') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(400, now);
+        osc.frequency.exponentialRampToValueAtTime(800, now + 0.1);
+        osc.frequency.exponentialRampToValueAtTime(1200, now + 0.3);
+        gainNode.gain.setValueAtTime(0, now);
+        gainNode.gain.linearRampToValueAtTime(0.5, now + 0.05);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
+        osc.start(now);
+        osc.stop(now + 0.4);
+    } else if (type === 'throw') {
+        // Noise burst for swoosh
+        const bufferSize = audioCtx.sampleRate * 0.2; 
+        const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+            data[i] = Math.random() * 2 - 1;
+        }
+        const noise = audioCtx.createBufferSource();
+        noise.buffer = buffer;
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(1000, now);
+        filter.frequency.linearRampToValueAtTime(100, now + 0.2);
+        
+        noise.connect(filter);
+        filter.connect(gainNode);
+        
+        gainNode.gain.setValueAtTime(0.3, now);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+        
+        noise.start(now);
+    }
+}
+
+// --- Entities ---
+
+const hoop = {
+    x: 0, y: 0, width: 100, rimRadius: 5,
+    leftRim: {x: 0, y: 0},
+    rightRim: {x: 0, y: 0},
+    backboard: {x: 0, yTop: 0, yBot: 0, width: 10},
+    netPoints: []
+};
+
+const ball = {
+    x: 0, y: 0, vx: 0, vy: 0, radius: 25,
+    isDragging: false, isFlying: false, hasScored: false,
+    rotation: 0, vRot: 0,
+    startX: 0, startY: 0,
+    prevY: 0
+};
+
+const input = {
+    startX: 0, startY: 0,
+    currX: 0, currY: 0,
+    active: false
+};
+
+// --- Initialization & Resizing ---
+function resize() {
+    cw = canvas.width = window.innerWidth;
+    ch = canvas.height = window.innerHeight;
+    
+    // Position hoop based on screen size
+    hoop.x = cw / 2;
+    hoop.y = ch * 0.3; // 30% down
+    hoop.width = Math.min(cw * 0.35, 140);
+    hoop.rimRadius = hoop.width * 0.05;
+    
+    hoop.leftRim.x = hoop.x - hoop.width / 2;
+    hoop.leftRim.y = hoop.y;
+    hoop.rightRim.x = hoop.x + hoop.width / 2;
+    hoop.rightRim.y = hoop.y;
+    
+    hoop.backboard.x = hoop.x + hoop.width / 2 + hoop.rimRadius * 3;
+    hoop.backboard.yTop = hoop.y - hoop.width * 0.8;
+    hoop.backboard.yBot = hoop.y + hoop.width * 0.2;
+    
+    // Init net points (simple 3x3 grid simulation)
+    hoop.netPoints = [];
+    for(let i=0; i<=4; i++) {
+        let px = hoop.leftRim.x + (hoop.width/4) * i;
+        hoop.netPoints.push({ x: px, y: hoop.y, tx: px, ty: hoop.y + hoop.width*0.8, vx: 0, vy: 0 });
+    }
+
+    if (!ball.isFlying && !ball.isDragging) {
+        resetBall();
+    }
+}
+
+function resetBall() {
+    ball.radius = Math.min(cw * 0.08, 35);
+    ball.x = cw / 2;
+    ball.y = ch - ball.radius - 120; // Above restart button
+    ball.startX = ball.x;
+    ball.startY = ball.y;
+    ball.vx = 0;
+    ball.vy = 0;
+    ball.vRot = 0;
+    ball.isFlying = false;
+    ball.isDragging = false;
+    ball.hasScored = false;
+}
+
+// --- Input Handling ---
+function handleStart(x, y) {
+    initAudio();
+    if (instructionsEl.style.opacity !== '0') instructionsEl.style.opacity = '0';
+    
+    if (ball.isFlying) return;
+    
+    // Hitbox for ball grabbing (generous)
+    const dx = x - ball.x;
+    const dy = y - ball.y;
+    if (Math.sqrt(dx*dx + dy*dy) < ball.radius * 3) {
+        input.active = true;
+        input.startX = x;
+        input.startY = y;
+        input.currX = x;
+        input.currY = y;
+        ball.isDragging = true;
+    }
+}
+
+function handleMove(x, y) {
+    if (!input.active) return;
+    input.currX = x;
+    input.currY = y;
+}
+
+function handleEnd() {
+    if (!input.active) return;
+    input.active = false;
+    ball.isDragging = false;
+    
+    const dx = input.startX - input.currX;
+    const dy = input.startY - input.currY;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    
+    if (dist > 10) {
+        // Launch
+        let pullDist = Math.min(dist, MAX_DRAG_DIST);
+        let angle = Math.atan2(dy, dx);
+        
+        ball.vx = Math.cos(angle) * pullDist * POWER_MULTIPLIER;
+        ball.vy = Math.sin(angle) * pullDist * POWER_MULTIPLIER;
+        ball.vRot = ball.vx * 0.05;
+        ball.isFlying = true;
+        ball.prevY = ball.y;
+        shots++;
+        updateStats();
+        playSound('throw');
+    }
+}
+
+// Mouse
+window.addEventListener('mousedown', e => handleStart(e.clientX, e.clientY));
+window.addEventListener('mousemove', e => handleMove(e.clientX, e.clientY));
+window.addEventListener('mouseup', handleEnd);
+
+// Touch
+window.addEventListener('touchstart', e => {
+    handleStart(e.touches[0].clientX, e.touches[0].clientY);
+}, {passive: false});
+window.addEventListener('touchmove', e => {
+    e.preventDefault(); // Prevent scrolling
+    handleMove(e.touches[0].clientX, e.touches[0].clientY);
+}, {passive: false});
+window.addEventListener('touchend', handleEnd);
+
+restartBtn.addEventListener('click', () => {
+    score = 0;
+    shots = 0;
+    updateStats();
+    resetBall();
+    hasStarted = false;
+    instructionsEl.style.opacity = '1';
+});
+
+// --- Physics & Logic ---
+
+function resolveCircleCollision(ball, rimX, rimY, rimR) {
+    let dx = ball.x - rimX;
+    let dy = ball.y - rimY;
+    let dist = Math.sqrt(dx*dx + dy*dy);
+    let minDist = ball.radius + rimR;
+
+    if (dist < minDist) {
+        // Overlap resolution
+        let angle = Math.atan2(dy, dx);
+        let overlap = minDist - dist;
+        ball.x += Math.cos(angle) * overlap;
+        ball.y += Math.sin(angle) * overlap;
+
+        // Velocity bounce
+        let normalX = Math.cos(angle);
+        let normalY = Math.sin(angle);
+        
+        // Dot product
+        let dotProduct = ball.vx * normalX + ball.vy * normalY;
+        
+        ball.vx -= 2 * dotProduct * normalX;
+        ball.vy -= 2 * dotProduct * normalY;
+        
+        ball.vx *= RIM_BOUNCE;
+        ball.vy *= RIM_BOUNCE;
+        
+        ball.vRot -= normalX * 0.2; // Spin on hit
+        
+        cameraShake = Math.max(cameraShake, 8);
+        playSound('rim');
+        
+        // Wiggle net
+        hoop.netPoints.forEach(p => p.vx += normalX * 2);
+    }
+}
+
+function update() {
+    if (cameraShake > 0) cameraShake *= 0.9;
+    if (cameraShake < 0.5) cameraShake = 0;
+
+    // Animate net
+    hoop.netPoints.forEach((p, i) => {
+        // Return to target
+        p.vx += (p.tx - p.x) * 0.1;
+        p.vy += (p.ty - p.y) * 0.1;
+        p.vx *= 0.8;
+        p.vy *= 0.8;
+        p.x += p.vx;
+        p.y += p.vy;
+    });
+
+    if (ball.isFlying) {
+        ball.prevY = ball.y;
+        
+        ball.vy += GRAVITY;
+        ball.vx *= FRICTION;
+        ball.vy *= FRICTION;
+        
+        ball.x += ball.vx;
+        ball.y += ball.vy;
+        ball.rotation += ball.vRot;
+
+        // Wall bounce
+        if (ball.x - ball.radius < 0) {
+            ball.x = ball.radius;
+            ball.vx = -ball.vx * BOUNCE_DAMPING;
+            playSound('bounce');
+        } else if (ball.x + ball.radius > cw) {
+            ball.x = cw - ball.radius;
+            ball.vx = -ball.vx * BOUNCE_DAMPING;
+            playSound('bounce');
+        }
+
+        // Floor bounce
+        if (ball.y + ball.radius > ch) {
+            ball.y = ch - ball.radius;
+            ball.vy = -ball.vy * BOUNCE_DAMPING;
+            ball.vx *= 0.9; // Friction on floor
+            ball.vRot *= 0.8;
+            if (Math.abs(ball.vy) > 2) playSound('bounce');
+        }
+
+        // Backboard collision (AABB mostly)
+        let bb = hoop.backboard;
+        if (ball.x + ball.radius > bb.x && ball.x - ball.radius < bb.x + bb.width) {
+            if (ball.y > bb.yTop && ball.y < bb.yBot) {
+                // Determine side
+                if (ball.vx > 0 && ball.x < bb.x) {
+                    ball.x = bb.x - ball.radius;
+                    ball.vx = -ball.vx * BOUNCE_DAMPING;
+                    playSound('bounce');
+                    cameraShake = Math.max(cameraShake, 5);
+                }
+            }
+        }
+
+        // Rim collisions
+        resolveCircleCollision(ball, hoop.leftRim.x, hoop.leftRim.y, hoop.rimRadius);
+        resolveCircleCollision(ball, hoop.rightRim.x, hoop.rightRim.y, hoop.rimRadius);
+
+        // Scoring Detection
+        if (!ball.hasScored && ball.vy > 0 && ball.y > hoop.y && ball.prevY <= hoop.y) {
+            // Crossed the hoop plane downwards
+            if (ball.x > hoop.leftRim.x && ball.x < hoop.rightRim.x) {
+                score++;
+                ball.hasScored = true;
+                updateStats();
+                showFeedback();
+                playSound('score');
+                
+                // Animate net
+                hoop.netPoints.forEach(p => {
+                    p.vy += 15;
+                    p.vx += (cw/2 - p.x) * 0.05; // Pull inward
+                });
+            }
+        }
+
+        // Auto reset if ball is dead or offscreen
+        if (ball.y > ch + 100 || (Math.abs(ball.vx) < 0.1 && Math.abs(ball.vy) < 0.1 && ball.y > ch - ball.radius - 10)) {
+            setTimeout(resetBall, 400); // Small delay before reset
+            ball.isFlying = false; // Prevent multiple timeouts
+        }
+    }
+}
+
+// --- Drawing ---
+
+function drawCourt() {
+    // Floor area
+    ctx.fillStyle = '#db7a37'; // Hardwood color
+    ctx.fillRect(0, ch - 80, cw, 80);
+    
+    // Key
+    ctx.fillStyle = '#b65f29';
+    ctx.fillRect(cw/2 - 100, ch - 80, 200, 80);
+}
+
+function drawHoopBack() {
+    // Pole
+    ctx.fillStyle = '#444';
+    ctx.fillRect(hoop.backboard.x + 5, hoop.y, 20, ch);
+    
+    // Backboard
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+    ctx.shadowBlur = 15;
+    ctx.fillRect(hoop.backboard.x, hoop.backboard.yTop, hoop.backboard.width, hoop.backboard.yBot - hoop.backboard.yTop);
+    ctx.shadowBlur = 0;
+    
+    // Backboard inner square
+    ctx.strokeStyle = varColor('--rim');
+    ctx.lineWidth = 4;
+    ctx.strokeRect(hoop.backboard.x + 2, hoop.y - hoop.width*0.4, 6, hoop.width*0.5);
+    
+    // Back Rim (drawn behind net)
+    ctx.beginPath();
+    ctx.ellipse(hoop.x, hoop.y, hoop.width/2, hoop.rimRadius*1.5, 0, Math.PI, 0);
+    ctx.strokeStyle = varColor('--rim');
+    ctx.lineWidth = hoop.rimRadius * 1.2;
+    ctx.stroke();
+}
+
+function drawNet() {
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    
+    ctx.beginPath();
+    // Vertical-ish lines
+    for(let i=0; i<hoop.netPoints.length; i++) {
+        let startX = hoop.leftRim.x + (hoop.width / (hoop.netPoints.length-1)) * i;
+        ctx.moveTo(startX, hoop.y);
+        ctx.lineTo(hoop.netPoints[i].x, hoop.netPoints[i].y);
+    }
+    
+    // Horizontal zigzag
+    for(let j=1; j<=3; j++) {
+        ctx.moveTo(hoop.netPoints[0].x, hoop.y + (hoop.width*0.8/4)*j);
+        for(let i=1; i<hoop.netPoints.length; i++) {
+            // Interpolate points
+            let px = hoop.netPoints[i].x;
+            let py = hoop.y + ((hoop.netPoints[i].y - hoop.y) / 3) * j;
+            ctx.lineTo(px, py);
+        }
+    }
+    ctx.stroke();
+}
+
+function drawHoopFront() {
+    // Front Rim
+    ctx.beginPath();
+    ctx.ellipse(hoop.x, hoop.y, hoop.width/2, hoop.rimRadius*1.5, 0, 0, Math.PI);
+    ctx.strokeStyle = varColor('--rim');
+    ctx.lineWidth = hoop.rimRadius * 1.5;
+    ctx.stroke();
+    
+    // Rim highlight
+    ctx.beginPath();
+    ctx.ellipse(hoop.x, hoop.y-2, hoop.width/2, hoop.rimRadius*0.8, 0, 0, Math.PI);
+    ctx.strokeStyle = '#ff7b85';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Rim nodes (connectors)
+    ctx.fillStyle = varColor('--rim');
+    ctx.beginPath(); ctx.arc(hoop.leftRim.x, hoop.leftRim.y, hoop.rimRadius, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(hoop.rightRim.x, hoop.rightRim.y, hoop.rimRadius, 0, Math.PI*2); ctx.fill();
+}
+
+function drawBall() {
+    ctx.save();
+    ctx.translate(ball.x, ball.y);
+    ctx.rotate(ball.rotation);
+
+    // Ball shadow
+    ctx.shadowColor = 'rgba(0,0,0,0.6)';
+    ctx.shadowBlur = 10;
+    ctx.shadowOffsetX = -5;
+    ctx.shadowOffsetY = 10;
+
+    // Base color
+    ctx.fillStyle = '#ff6b35';
+    ctx.beginPath();
+    ctx.arc(0, 0, ball.radius, 0, Math.PI*2);
+    ctx.fill();
+    
+    ctx.shadowColor = 'transparent'; // Turn off shadow for details
+    
+    // Lighting gradient
+    let grad = ctx.createRadialGradient(-ball.radius/3, -ball.radius/3, ball.radius/10, 0, 0, ball.radius);
+    grad.addColorStop(0, 'rgba(255,255,255,0.3)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.4)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Lines
+    ctx.strokeStyle = '#222';
+    ctx.lineWidth = ball.radius * 0.08;
+    ctx.lineCap = 'round';
+    
+    ctx.beginPath(); ctx.moveTo(-ball.radius, 0); ctx.lineTo(ball.radius, 0); ctx.stroke(); // Horizontal
+    ctx.beginPath(); ctx.moveTo(0, -ball.radius); ctx.lineTo(0, ball.radius); ctx.stroke(); // Vertical
+    
+    // Curves
+    ctx.beginPath(); ctx.arc(-ball.radius, 0, ball.radius*0.7, -Math.PI/2, Math.PI/2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(ball.radius, 0, ball.radius*0.7, Math.PI/2, Math.PI*1.5); ctx.stroke();
+
+    ctx.restore();
+}
+
+function drawAimGuide() {
+    if (!ball.isDragging) return;
+    
+    const dx = input.startX - input.currX;
+    const dy = input.startY - input.currY;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    
+    if (dist < 10) return;
+    
+    let pullDist = Math.min(dist, MAX_DRAG_DIST);
+    let angle = Math.atan2(dy, dx);
+    
+    let pvx = Math.cos(angle) * pullDist * POWER_MULTIPLIER;
+    let pvy = Math.sin(angle) * pullDist * POWER_MULTIPLIER;
+    
+    ctx.beginPath();
+    ctx.setLineDash([8, 12]);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+    ctx.lineWidth = 3;
+    
+    let px = ball.x;
+    let py = ball.y;
+    
+    ctx.moveTo(px, py);
+    // Simulate trajectory
+    for(let i=0; i<30; i++) {
+        pvy += GRAVITY;
+        px += pvx;
+        py += pvy;
+        if(i % 2 === 0) ctx.lineTo(px, py); // Add point every other step for dashes
+        if(py > ch || px < 0 || px > cw) break;
+    }
+    
+    ctx.stroke();
+    ctx.setLineDash([]);
+}
+
+function draw() {
+    ctx.clearRect(0, 0, cw, ch);
+    
+    ctx.save();
+    if (cameraShake > 0) {
+        ctx.translate((Math.random()-0.5)*cameraShake, (Math.random()-0.5)*cameraShake);
+    }
+    
+    drawCourt();
+    drawHoopBack();
+    
+    // Draw ball behind front rim but in front of backboard/net based on Y & vy
+    if (ball.y < hoop.y || ball.vy < 0) {
+        drawBall();
+        drawNet();
+        drawHoopFront();
+    } else {
+        drawNet();
+        drawHoopFront();
+        drawBall();
+    }
+    
+    drawAimGuide();
+    
+    ctx.restore();
+}
+
+function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+}
+
+// --- UI Logic ---
+function updateStats() {
+    scoreEl.innerText = score;
+    shotsEl.innerText = shots;
+    let pct = shots === 0 ? 0 : Math.round((score / shots) * 100);
+    pctEl.innerText = pct;
+}
+
+function showFeedback() {
+    feedbackEl.innerText = ['SWISH!', 'NICE!', 'PERFECT!', 'SCORE!'][Math.floor(Math.random() * 4)];
+    feedbackEl.classList.add('show');
+    setTimeout(() => {
+        feedbackEl.classList.remove('show');
+    }, 1000);
+}
+
+function varColor(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+// Boot
+window.addEventListener('resize', resize);
+resize();
+loop();
+
+</script>
+</body>
+</html>
